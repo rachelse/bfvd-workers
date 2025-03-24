@@ -1,0 +1,9 @@
+name = "bfvd"
+main = "src/worker.js"
+compatibility_date = "2024-09-03"
+workers_dev = true
+preview_urls = true
+
+[[r2_buckets]]
+binding = "MY_BUCKET"
+bucket_name = "bfvd"
