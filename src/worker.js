@@ -110,12 +110,11 @@ function autoIndex(objects) {
 
   folders.forEach(folder => {html += `
     <tr>
-      <td><a href="https://bfvd.steineggerlab.workers.dev/${encodeURIComponent(folder)}" download>${folder}</a></td>
+      <td><a href="https://bfvd.steineggerlab.workers.dev/?versions=${encodeURIComponent(folder)}" download> archived/${folder}</a></td>
       <td></td>
       <td></td>
     </tr>`;});
 
-  // objects.forEach(folder => {html += `<li><a href="/?version=${encodeURIComponent(folder)}">${folder}</a></li>`;});
   html += `
     </tbody>
   </table>
@@ -200,6 +199,46 @@ function autoIndex(objects) {
   </div>
   </div>
   </div>
+  </body>
+</html>`;
+  return html;
+}
+
+function autoIndexVersions(version, fileObjects) {
+  let html = `
+<html>
+  <head>
+    <title>BFVD</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="https://uniclust.mmseqs.com/css/uniclust.css?v=2" type="text/css">
+  </head>
+  <body>
+    <div class="container" style="margin-top: 50px;">
+      <h1>BFVD ${version}</h1>
+      <div class="table-responsive">
+      <table id="indexlist" class="table table-striped table-bordered table-hover">
+        <thead>
+          <tr>
+            <th>Name</th>
+            <th>Uploaded</th>
+            <th>Size</th>
+          </tr>
+        </thead>
+        <tbody>`; 
+  for (let i in fileObjects) {
+    let obj = fileObjects[i];
+    html += `
+    <tr>
+      <td><a href="https://bfvd.steineggerlab.workers.dev/${obj.key}" download>${obj.key}</a></td>
+      <td>${obj.uploaded.toUTCString()}</td>
+      <td>${humanFileSize(obj.size)}</td>
+    </tr>`;
+  }
+  html += `
+        </tbody>
+      </table>
+      </div>
+    </div>
   </body>
 </html>`;
   return html;
@@ -387,6 +426,19 @@ var src_default = {
       return await handleDbRequest(request, env, ctx, type, id_part);
     }
 
+    // Handle requests for archived data
+    if (url.searchParams.has("versions")) {
+      const version = url.searchParams.get("versions");
+      // List all objects in the bucket (you might need to adjust the limit if many objects exist)
+      const listResponse = await env.MY_BUCKET.list({ limit: 1000 });
+      const versionObjects = listResponse.objects.filter(obj => {
+        return obj.key.startsWith(version + "/");
+      });
+      const headers = new Headers();
+      headers.set("content-type", "text/html;charset=UTF-8");
+      return new Response(autoIndexVersions(version, versionObjects), { headers, status: 200 });
+    }
+
     let key = url.pathname.slice(1);
     if (key === "bfvd.tar.gz" || key === "bfvd.version" || key === "bfvd_foldseekdb.tar.gz") {
       key = "latest/" + key;
@@ -394,6 +446,7 @@ var src_default = {
     if (!authorizeRequest(request, env, key)) {
       return new Response("Forbidden", { status: 403 });
     }
+
     if (key == "" && request.method == "GET") {
       let response = await caches.default.match(request);
       if (!response) {
@@ -401,21 +454,11 @@ var src_default = {
         const headers = new Headers()
         headers.set("content-type", "text/html;charset=UTF-8")
         response = new Response(autoIndex(list.objects), { headers, status: 200 });
-        // const latestObjects = list.objects.filter(obj => obj.key.startsWith("latest/"));
-        // response = new Response(autoIndex(latestObjects), { headers, status: 200 });
-        // const foldersSet = new Set();
-        // list.objects.forEach(obj => {
-        //   const parts = obj.key.split("/");
-        //   if (parts.length > 1) {
-        //     foldersSet.add(parts[0]);
-        //   }
-        // });
-        // const folders = Array.from(foldersSet).sort();
-        // response = new Response(autoIndex(folders), { headers, status: 200 });
         ctx.waitUntil(caches.default.put(request, response.clone()));
       }
       return response;
     }
+
     if (request.method == "HEAD") {
       const object = await env.MY_BUCKET.head(key);
       if (object === null) {

@@ -7,3 +7,4 @@ preview_urls = true
 [[r2_buckets]]
 binding = "MY_BUCKET"
 bucket_name = "bfvd"
+preview_bucket_name = "bfvd"
