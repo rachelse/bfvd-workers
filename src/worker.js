@@ -436,7 +436,9 @@ var src_default = {
       });
       const headers = new Headers();
       headers.set("content-type", "text/html;charset=UTF-8");
-      return new Response(autoIndexVersions(version, versionObjects), { headers, status: 200 });
+      const response = new Response(autoIndexVersions(version, versionObjects), { headers, status: 200 });
+      ctx.waitUntil(caches.default.put(request, response.clone()));
+      return response;
     }
 
     let key = url.pathname.slice(1);
