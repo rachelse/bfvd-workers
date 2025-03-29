@@ -94,7 +94,7 @@ function autoIndex(objects) {
       const displayName = obj.key.replace(/^latest\//, "");
       html += `
       <tr>
-        <td><a href="https://bfvd.steineggerlab.workers.dev/${obj.key}" download>${displayName}</a></td>
+        <td><a href="https://bfvd.steineggerlab.workers.dev/${obj.key}" target="_blank">${displayName}</a></td>
         <td>${obj.uploaded.toUTCString()}</td>
         <td>${humanFileSize(obj.size)}</td>
       </tr>`;
@@ -267,6 +267,11 @@ async function handleDbRequest(request, env, ctx, type, id_part) {
       'index': 'latest/3dbeacon.tar.index',
       'mime': 'application/json'
     },
+    'pae': {
+      'tar': 'latest/pae.tar',
+      'index': 'latest/pae.tar.index',
+      'mime': 'application/json'
+    }
   };
   const db = dbs[type];
 
@@ -418,11 +423,15 @@ var src_default = {
     const url = new URL(request.url);
 
     // Handle requests to databases
-    const match = url.pathname.match(/^\/(pdb|a3m|cif|json)\//);
+    const match = url.pathname.match(/^\/(pdb|a3m|cif|json|pae)\//);
     const type = match ? match[1] : null;
+    let extension = type ? type : null;
+    if (type === "pae") {
+      extension = "json";
+    }
     if (type) {
       const keyWithExtension = url.pathname.slice(`/${type}/`.length);
-      const id_part = keyWithExtension.replace(`.${type}`, '');
+      const id_part = keyWithExtension.replace(`.${extension}`, '');
       return await handleDbRequest(request, env, ctx, type, id_part);
     }
 
