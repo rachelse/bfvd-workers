@@ -33,11 +33,11 @@ function humanFileSize(bytes, si = false, dp = 1) {
   return bytes.toFixed(dp) + ' ' + units[u];
 }
 
-function autoIndex(base, latestObjects, versionPrefixes) {
+function autoIndex(base, release, latestObjects, versionPrefixes) {
   let html = `
 <html>
   <head>
-    <title>BFVD</title>
+    <title>BFVD ${escapeHtml(release)}</title>
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link rel="stylesheet" href="https://uniclust.mmseqs.com/css/uniclust.css?v=2" type="text/css">
   </head>
@@ -96,8 +96,11 @@ function autoIndex(base, latestObjects, versionPrefixes) {
   <div class="col-xs-12">
     <h3>Readme</h3>
     <p>
-    The Big Fantastic Virus Database (BFVD) is a repository of 351,242 protein structures predicted by applying ColabFold to the viral sequence representatives of the UniRef30 clusters. 
-    BFVD holds a unique repertoire of protein structures, spanning major viral clades.
+    The Big Fantastic Virus Database (BFVD) is a repository of 5,776,417 viral protein
+    structures predicted with ColabFold-AlphaFold2. BFVD v3 covers 98.9% of the viral
+    sequences in UniProt 2025_03, fully covers 72.6% of viral reference proteomes, and
+    spans 72.7% of ICTV-recognized virus species, with 75.3% of entries predicted at
+    high confidence (pLDDT &ge; 70).
     </p>
     <p>
     <a href="https://doi.org/10.1093/nar/gkae1119">Kim R, Levy Karin E, Steinegger M. BFVD - a large repository of predicted viral protein structures Nucleic Acids Research doi: doi.org/10.1093/nar/gkae1119 (2024)</a>
@@ -116,6 +119,10 @@ function autoIndex(base, latestObjects, versionPrefixes) {
                   For those insufficient homologs, we augmented the alignments using Logan-based data and performed 12-cycle predictions. 
                   This process generated three versions for each affected entry: (1) Base-MSA, (2) Base+Logan-MSA, and (3) Base+Logan-MSA & 12-recycles.
                   Finally, we kept the best-scoring model (based on pLDDT) for each entry.</li>
+      <li><strong>2026-09-15 (2025_03_v3):</strong> 5,776,417 structures, a 16.4-fold increase over v2.</br>
+                  Predicted for individual UniProt 2025_03 viral sequences (&le;2,000 residues)
+                  rather than for UniRef30 cluster representatives.
+                  Every entry was predicted from a Base+Logan50-MSA.</li>
       </ul>
     </p>
     </p>
@@ -131,38 +138,38 @@ function autoIndex(base, latestObjects, versionPrefixes) {
     </p>
     <h3>Data description</h3>  
     <p>
-    <b>1-bfvd.tar.gz</b>: 351,242 predicted structures of BFVD.</br>
+    Files below are those published for the current release (${escapeHtml(release)}).
+    Earlier releases are under <i>archived/</i> and contain a different set of files.
+    </p>
+    <p>
+    <b>1-bfvd_v3_pdbs.tar.zst</b>: 5,776,417 predicted structures of BFVD, as PDB files.</br>
     <b>2-bfvd.version</b>: version file.</br>
-    <b>3-bfvd_foldcompdb.tar.gz</b>: Compressed version of Foldseek database using Foldcomp.</br>
-        Only 347,481 structures, none of which are discontinuous, were included.</br>
-    <b>4-bfvd_foldseekdb.tar.gz</b>: Foldseek databse of 351,242 predicted structures of BFVD.</br>
-    <b>5-bfvd_metadata.tsv</b>: General information of each model.</br>
+    <b>3-bfvd_foldseekdb.tar.gz</b>: Foldseek database of 5,776,417 predicted structures of BFVD.</br>
+    <b>4-bfvd_v3_metadata.tsv.tar.gz</b>: General information of each entry.</br>
       <ol>
-        <li><strong>UniRef100</strong>: UniRef100 identifier of the sequence</li>
-        <li><strong>model</strong>: File name of the predicted protein structure</li>
-        <li><strong>avg_pLDDT</strong>: Average pLDDT score of the predicted protein structure</li>
-        <li><strong>pTM</strong>: pTM score of the predicted protein structure</li>
-        <li><strong>splitted</strong>: Whether the protein sequence of UniRef100 entry was splitted into multiple models<br> We splitted the protein sequences if their length are above 1500. (0 = not splitted, 1 = splitted)</li>
-        <li><strong>version</strong>: Specifies the MSA/refinement pipeline used to produce the final BFVD structure. (BASE, BASE+LOGAN, or BASE+LOGAN+12CY)</li>
+        <li><strong>accession</strong>: UniProt accession of the sequence</li>
+        <li><strong>protein_name</strong>: Protein name from UniProt</li>
+        <li><strong>length</strong>: Number of modelled residues</li>
+        <li><strong>plddt</strong>: Average pLDDT score of the predicted protein structure</li>
+        <li><strong>ptm</strong>: pTM score of the predicted protein structure (NA for ProteinTTT models)</li>
+        <li><strong>model</strong>: Prediction method used for the released structure (ColabFold-AF2 or ProteinTTT)</li>
+        <li><strong>basemsa</strong>: Number of sequences in the base MSA</li>
+        <li><strong>loganmsa</strong>: Number of sequences in the MSA after adding Logan50 homologs</li>
+        <li><strong>taxid</strong>: Taxonomy identifier of the protein</li>
+        <li><strong>taxname</strong>: Scientific name of the taxonomy identifier</li>
+        <li><strong>ictv_id</strong>: ICTV identifier mapped from the taxonomy identifier</li>
+        <li><strong>uniprot_host</strong>: Host organism retrieved by UniProt</li>
+        <li><strong>ictv_host_category</strong>: ICTV host category</li>
+        <li><strong>proteome_id</strong>: UniProt proteome(s) the entry belongs to, separated by ';'</li>
       </ol>
-    <b>6-msa.tar</b>: MSAs for each BFVD entries</br>
-    <b>7-bfvd_taxid.tsv</b>: BFVD entry and their taxonomic identifier.</br>
-      <ol>
-        <li><strong>model</strong>: File name of the BFVD.</li>
-        <li><strong>taxId</strong>: Taxonomy identifier of the protein.</br>The protein ID, the portion before the first underscore in model, was used to retrieve the taxonomy ID.</li>
-      </ol>
-    <b>8-bfvd_taxID_rank_scientificname_lineage.tsv</b>: BFVD entry and their taxonomic information.</br>
+      Absent values are given as NA.</br>
+    <b>5-bfvd_v3_taxID_rank_scientificname_lineage.tsv.tar.gz</b>: BFVD entry and their taxonomic information.</br>
       <ol>
         <li><strong>model</strong>: File name of the BFVD.</li>
         <li><strong>taxId</strong>: Taxonomy identifier of the protein.</br>The protein ID, the portion before the first underscore in model, was used to retrieve the taxonomy ID.</li>
         <li><strong>rank</strong>: rank of the taxonomy.</li>
         <li><strong>scientific name</strong>: scientific name of the corresponding taxonomy identifier.</li>
         <li><strong>lineage</strong>: lineage of the taxonomy.</li>
-      </ol>
-    <b>9-uniref30_2302_virus-rep_mem.tsv</b>: UniRef30 virus clusters.</br>
-      <ol>
-        <li><strong>repId</strong>: Cluster representatives used for structure prediction</li>
-        <li><strong>memId</strong>: Member corresponding to the representative</li>
       </ol>
     </p>
   </div>
@@ -218,11 +225,7 @@ function autoIndexVersions(base, version, fileObjects) {
 }
 
 const DBS = {
-  a3m:  { tar: 'latest/msa.tar',        index: 'latest/msa.tar.index',        mime: 'text/plain' },
-  pdb:  { tar: 'latest/bfvd_indexed.tar', index: 'latest/bfvd_indexed.tar.index', mime: 'chemical/x-pdb' },
-  cif:  { tar: 'latest/cif.tar',        index: 'latest/cif.tar.index',        mime: 'chemical/x-cif' },
-  json: { tar: 'latest/3dbeacon.tar',   index: 'latest/3dbeacon.tar.index',   mime: 'application/json' },
-  pae:  { tar: 'latest/pae.tar',        index: 'latest/pae.tar.index',        mime: 'application/json' },
+  pdb: { tar: 'latest/bfvd_indexed.tar', index: 'latest/bfvd_indexed.tar.index', mime: 'chemical/x-pdb' },
 };
 
 const CORS = {
@@ -335,12 +338,12 @@ export default {
     const url = new URL(request.url);
     const base = url.origin + '/';
 
-    const match = url.pathname.match(/^\/(pdb|a3m|cif|json|pae)\//);
-    const type = match ? match[1] : null;
-    if (type) {
-      const extension = type === 'pae' ? 'json' : type;
-      const keyWithExtension = url.pathname.slice(`/${type}/`.length);
-      const id_part = keyWithExtension.replace(`.${extension}`, '');
+    // Only /pdb/ is served per-entry. msa/cif/pae are bulk downloads; their
+    // .index files are published but not used by the worker.
+    const match = url.pathname.match(/^\/(pdb)\//);
+    if (match) {
+      const type = match[1];
+      const id_part = url.pathname.slice(`/${type}/`.length).replace(`.${type}`, '');
       return await handleDbRequest(request, env, ctx, type, id_part);
     }
 
@@ -352,7 +355,7 @@ export default {
       // survives a deploy and hides HTML changes.
       const headers = new Headers({
         'content-type': 'text/html;charset=UTF-8',
-        'cache-control': 'public, max-age=3600',
+        'cache-control': 'public, max-age=60',
       });
       return new Response(autoIndexVersions(base, version, objects), { headers, status: 200 });
     }
@@ -367,7 +370,8 @@ export default {
     if (key === '' && request.method === 'GET') {
       // Two exact listings instead of filtering a capped 100-key page:
       // everything under the current version, and the top-level folders.
-      const latestPrefix = (env.LATEST_PREFIX || 'latest').replace(/\/$/, '') + '/';
+      const release = (env.LATEST_PREFIX || 'latest').replace(/\/$/, '');
+      const latestPrefix = release + '/';
       const [latest, top] = await Promise.all([
         s3List(env, { sub: latestPrefix }),
         s3List(env, { delimiter: '/' }),
@@ -381,7 +385,7 @@ export default {
         'content-type': 'text/html;charset=UTF-8',
         'cache-control': 'public, max-age=60',
       });
-      return new Response(autoIndex(base, latestObjects, folders), { headers, status: 200 });
+      return new Response(autoIndex(base, release, latestObjects, folders), { headers, status: 200 });
     }
 
     const s3key = resolveKey(env, key);
