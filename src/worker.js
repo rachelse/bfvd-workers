@@ -1,55 +1,39 @@
-// src/index.js
-//var ALLOW_LIST = ["alphafold_swissprot.tar.gz", "alphafolddb.tar.gz", "pdb100.tar.gz", "pdb100.version"];
+import { s3Get, s3Head, s3List, escapeHtml } from './s3.mjs';
 
-function parseRange(encoded) {
-  if (encoded === null) {
-    return
-  }
+const PASS_THROUGH = [
+  'content-type', 'content-length', 'content-encoding', 'content-range',
+  'etag', 'last-modified', 'accept-ranges', 'cache-control',
+];
 
-  const parts = encoded.split("bytes=")[1]?.split("-") ?? []
-  if (parts.length !== 2) {
-    throw new Error('Not supported to skip specifying the beginning/ending byte at this time')
-  }
-
-  return {
-    offset: Number(parts[0]),
-    end:    Number(parts[1]),
-    length: Number(parts[1]) + 1 - Number(parts[0]),
-  }
-}
-
-function authorizeRequest(request, env, key) {
+function authorizeRequest(request) {
   switch (request.method) {
-    case "HEAD":
-    case "GET":
-      //return ALLOW_LIST.includes(key);
+    case 'HEAD':
+    case 'GET':
       return true;
     default:
       return false;
   }
 }
 
-function humanFileSize(bytes, si=false, dp=1) {
-  const thresh = si ? 1000 : 1024;
+// `latest/` may be a real folder of copies, or LATEST_PREFIX may point at the
+// current version folder so nothing has to be duplicated in S3.
+function resolveKey(env, key) {
+  const latest = env.LATEST_PREFIX || 'latest';
+  return latest === 'latest' ? key : key.replace(/^latest\//, latest.replace(/\/$/, '') + '/');
+}
 
-  if (Math.abs(bytes) < thresh) {
-    return bytes + ' B';
-  }
-
+function humanFileSize(bytes, si = false, dp = 1) {
+  const thresh = si ? 1e3 : 1024;
+  if (Math.abs(bytes) < thresh) return bytes + ' B';
   const units = ['kB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'];
   let u = -1;
-  const r = 10**dp;
-
-  do {
-    bytes /= thresh;
-    ++u;
-  } while (Math.round(Math.abs(bytes) * r) / r >= thresh && u < units.length - 1);
-
-
+  const r = 10 ** dp;
+  do { bytes /= thresh; ++u; }
+  while (Math.round(Math.abs(bytes) * r) / r >= thresh && u < units.length - 1);
   return bytes.toFixed(dp) + ' ' + units[u];
 }
 
-function autoIndex(objects) {
+function autoIndex(base, latestObjects, versionPrefixes) {
   let html = `
 <html>
   <head>
@@ -85,35 +69,25 @@ function autoIndex(objects) {
       </tr>
     </thead>
     <tbody>`;
-  
-  const foldersSet = new Set();
-  for (let i in objects) {
-    let obj = objects[i];
 
-    if (obj.key.startsWith("latest/")) {
-      const displayName = obj.key.replace(/^latest\//, "");
-      html += `
+  for (const obj of latestObjects) {
+    const displayName = obj.key.replace(/^[^/]+\//, '');
+    html += `
       <tr>
-        <td><a href="https://bfvd.steineggerlab.workers.dev/${obj.key}" target="_blank">${displayName}</a></td>
+        <td><a href="${escapeHtml(base + obj.key.split('/').map(encodeURIComponent).join('/'))}" target="_blank">${escapeHtml(displayName)}</a></td>
         <td>${obj.uploaded.toUTCString()}</td>
         <td>${humanFileSize(obj.size)}</td>
       </tr>`;
-    } else {
-      const parts = obj.key.split("/");
-      if (parts.length > 1) {
-        foldersSet.add(parts[0]);
-      }
-    }
   }
 
-  const folders = Array.from(foldersSet).sort();
-
-  folders.forEach(folder => {html += `
+  for (const folder of versionPrefixes) {
+    html += `
     <tr>
-      <td><a href="https://bfvd.steineggerlab.workers.dev/?versions=${encodeURIComponent(folder)}" download> archived/${folder}</a></td>
+      <td><a href="${escapeHtml(base + '?versions=' + encodeURIComponent(folder))}"> archived/${escapeHtml(folder)}</a></td>
       <td></td>
       <td></td>
-    </tr>`;});
+    </tr>`;
+  }
 
   html += `
     </tbody>
@@ -136,7 +110,7 @@ function autoIndex(objects) {
       <li><strong>2024-09-04:</strong> First distribution of BFVD.</li>
       <li><strong>2024-11-01 (2023_02_v1):</strong> 175,454 Base-MSA & 175,788 Base+Logan-MSA</br>
                   Of the 351,242 BFVD entries initially predicted with a base multiple sequence alignment (base-MSA), 175,788 lacked detectable homologs.
-                  For these, we augmented the alignments using Logan’s large-scale assemblies, reinforcing nearly half of all BFVD entries.</li>
+                  For these, we augmented the alignments using Logan's large-scale assemblies, reinforcing nearly half of all BFVD entries.</li>
       <li><strong>2025-03-17 (2023_02_v2):</strong> 205,681 Base-MSA & 37,296 Base+Logan-MSA & 108,265 Base+Logan-MSA + 12-recycles</br>
                   Of the 351,242 BFVD entries, 175,788 lacked identifiable homologs in their base MSAs. The remaining entries, which had sufficient homologs, were left unchanged.
                   For those insufficient homologs, we augmented the alignments using Logan-based data and performed 12-cycle predictions. 
@@ -204,7 +178,7 @@ function autoIndex(objects) {
   return html;
 }
 
-function autoIndexVersions(version, fileObjects) {
+function autoIndexVersions(base, version, fileObjects) {
   let html = `
 <html>
   <head>
@@ -214,7 +188,7 @@ function autoIndexVersions(version, fileObjects) {
   </head>
   <body>
     <div class="container" style="margin-top: 50px;">
-      <h1>BFVD ${version}</h1>
+      <h1>BFVD ${escapeHtml(version)}</h1>
       <div class="table-responsive">
       <table id="indexlist" class="table table-striped table-bordered table-hover">
         <thead>
@@ -224,12 +198,11 @@ function autoIndexVersions(version, fileObjects) {
             <th>Size</th>
           </tr>
         </thead>
-        <tbody>`; 
-  for (let i in fileObjects) {
-    let obj = fileObjects[i];
+        <tbody>`;
+  for (const obj of fileObjects) {
     html += `
     <tr>
-      <td><a href="https://bfvd.steineggerlab.workers.dev/${obj.key}" download>${obj.key}</a></td>
+      <td><a href="${escapeHtml(base + obj.key.split('/').map(encodeURIComponent).join('/'))}" download>${escapeHtml(obj.key)}</a></td>
       <td>${obj.uploaded.toUTCString()}</td>
       <td>${humanFileSize(obj.size)}</td>
     </tr>`;
@@ -244,142 +217,37 @@ function autoIndexVersions(version, fileObjects) {
   return html;
 }
 
-async function handleDbRequest(request, env, ctx, type, id_part) {
-  // names of the index file and tar file in R2
-  const dbs = {
-    'a3m': {
-      'tar': 'latest/msa.tar',
-      'index': 'latest/msa.tar.index',
-      'mime': 'text/plain'
-    },
-    'pdb': {
-      'tar': 'latest/bfvd_indexed.tar',
-      'index': 'latest/bfvd_indexed.tar.index',
-      'mime': 'chemical/x-pdb'
-    },
-    'cif': {
-      'tar': 'latest/cif.tar',
-      'index': 'latest/cif.tar.index',
-      'mime': 'chemical/x-cif'
-    },
-    'json': {
-      'tar': 'latest/3dbeacon.tar',
-      'index': 'latest/3dbeacon.tar.index',
-      'mime': 'application/json'
-    },
-    'pae': {
-      'tar': 'latest/pae.tar',
-      'index': 'latest/pae.tar.index',
-      'mime': 'application/json'
-    }
-  };
-  const db = dbs[type];
+const DBS = {
+  a3m:  { tar: 'latest/msa.tar',        index: 'latest/msa.tar.index',        mime: 'text/plain' },
+  pdb:  { tar: 'latest/bfvd_indexed.tar', index: 'latest/bfvd_indexed.tar.index', mime: 'chemical/x-pdb' },
+  cif:  { tar: 'latest/cif.tar',        index: 'latest/cif.tar.index',        mime: 'chemical/x-cif' },
+  json: { tar: 'latest/3dbeacon.tar',   index: 'latest/3dbeacon.tar.index',   mime: 'application/json' },
+  pae:  { tar: 'latest/pae.tar',        index: 'latest/pae.tar.index',        mime: 'application/json' },
+};
 
-  // Handle OPTIONS preflight request
-  if (request.method === 'OPTIONS') {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Allow-Methods': 'GET, OPTIONS',
-        'Access-Control-Allow-Headers': 'Content-Type',
-        'Access-Control-Max-Age': '86400',
-      },
-    });
-  }
+const CORS = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Methods': 'GET, OPTIONS',
+  'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Max-Age': '86400',
+};
 
-  // Check if response is cached
-  let cacheKey = new Request(request.url, request);
-  let response = await caches.default.match(cacheKey);
-  if (response) {
-    // Add CORS headers to cached response
-    response = new Response(response.body, {
-      ...response,
-      encodeBody: "manual"
-    });
-    response.headers.set('Access-Control-Allow-Origin', '*');
-    response.headers.set('Content-Type', db.mime);
-    response.headers.set('Content-Encoding', 'gzip');
-    return response;
-  }
-
-  // Fetch the index file from R2
-  const indexObject = await env.MY_BUCKET.get(db.index);
-  if (!indexObject) {
-    throw new Error('Index file not found in R2');
-  }
-  const indexText = await indexObject.text();
-  // Split the index file into lines
-  const lines = indexText.split('\n').filter((line) => line.trim() !== '');
-
-  let indexEntry = null;
-  try {
-    // Perform binary search on the index file
-    indexEntry = await binarySearchIndex(lines, id_part);
-    if (!indexEntry) {
-      indexEntry = await binarySearchIndex(lines, id_part + "_1");
-      if (!indexEntry) {
-        return new Response('File not found', {
-          status: 404,
-          headers: {
-            'Access-Control-Allow-Origin': '*',
-          },
-        });
-      }
-    }
-
-    const { fileContentOffset, contentLength } = indexEntry;
-
-    // Fetch the compressed file content from the tar file in R2
-    const compressedContent = await fetchFileContent(
-      env.MY_BUCKET,
-      db.tar,
-      fileContentOffset,
-      contentLength
-    );
-
-    // Return the compressed content to the requester
-    response = new Response(compressedContent, {
-      status: 200,
-      headers: {
-        'Content-Type': db.mime,
-        'Content-Encoding': 'gzip',
-        'Content-Length': contentLength.toString(),
-        'Access-Control-Allow-Origin': '*', // Allow CORS for all origins
-      },
-      encodeBody: 'manual',
-    });
-
-    // Cache the response
-    ctx.waitUntil(caches.default.put(cacheKey, response.clone()));
-
-    return response;
-  } catch (error) {
-    console.error(error);
-    return new Response('Internal Server Error', {
-      status: 500,
-      headers: {
-        'Access-Control-Allow-Origin': '*', // Allow CORS for error responses as well
-      },
-    });
-  }
+async function loadIndex(env, indexKey) {
+  const res = await s3Get(env, indexKey, { cf: { cacheTtl: 86400, cacheEverything: true } });
+  if (!res.ok) throw new Error(`index fetch failed for ${indexKey}: ${res.status}`);
+  const text = await res.text();
+  return text.split('\n').filter((line) => line.trim() !== '');
 }
 
-async function binarySearchIndex(index, targetId) {
-  // Perform binary search over the lines
+function binarySearchIndex(lines, targetId) {
   let low = 0;
-  let high = index.length - 1;
-
+  let high = lines.length - 1;
   while (low <= high) {
     const mid = Math.floor((low + high) / 2);
-    const line = index[mid];
-    const [idPart, fileOffsetStr, contentLengthStr] = line.split('\t');
-
+    const [idPart, fileOffsetStr, contentLengthStr] = lines[mid].split('\t');
     if (!idPart || !fileOffsetStr || !contentLengthStr) {
-      // Malformed line, throw an error
       throw new Error(`Malformed line in index file at line ${mid + 1}`);
     }
-
     if (idPart === targetId) {
       const fileContentOffset = parseInt(fileOffsetStr, 10);
       const contentLength = parseInt(contentLengthStr, 10);
@@ -388,130 +256,156 @@ async function binarySearchIndex(index, targetId) {
       }
       return { fileContentOffset, contentLength };
     }
-
-    if (idPart < targetId) {
-      low = mid + 1;
-    } else {
-      high = mid - 1;
-    }
+    if (idPart < targetId) low = mid + 1;
+    else high = mid - 1;
   }
-
-  // Not found
   return null;
 }
 
-async function fetchFileContent(bucket, tarFileName, fileContentOffset, contentLength) {
-  // Fetch the file content using a range request
-  const object = await bucket.get(tarFileName, {
-    range: {
-      offset: fileContentOffset,
-      length: contentLength,
-    },
-  });
+async function handleDbRequest(request, env, ctx, type, id_part) {
+  if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
 
-  if (!object) {
-    throw new Error('Failed to fetch file content from tar file in R2');
+  const db = DBS[type];
+  const tarKey = resolveKey(env, db.tar);
+  const indexKey = resolveKey(env, db.index);
+
+  // Version-scoped cache key: bumping DATA_VERSION invalidates the whole
+  // cache on release, without a Cloudflare cache purge.
+  const cacheKey = new Request(
+    `https://db.bfvd.internal/${env.DATA_VERSION}/${type}/${encodeURIComponent(id_part)}`);
+
+  let response = await caches.default.match(cacheKey);
+  if (response) {
+    response = new Response(response.body, { ...response, encodeBody: 'manual' });
+    response.headers.set('Access-Control-Allow-Origin', '*');
+    response.headers.set('Content-Type', db.mime);
+    response.headers.set('Content-Encoding', 'gzip');
+    return response;
   }
 
-  const arrayBuffer = await object.arrayBuffer();
+  try {
+    const lines = await loadIndex(env, indexKey);
+    const entry = binarySearchIndex(lines, id_part) || binarySearchIndex(lines, id_part + '_1');
+    if (!entry) {
+      return new Response('File not found', { status: 404, headers: { 'Access-Control-Allow-Origin': '*' } });
+    }
 
-  return arrayBuffer;
+    const { fileContentOffset, contentLength } = entry;
+    const res = await s3Get(env, tarKey, {
+      range: `bytes=${fileContentOffset}-${fileContentOffset + contentLength - 1}`,
+    });
+    if (res.status !== 206 && res.status !== 200) {
+      throw new Error(`tar range read failed for ${tarKey}: ${res.status}`);
+    }
+    const body = await res.arrayBuffer();
+
+    response = new Response(body, {
+      status: 200,
+      headers: {
+        'Content-Type': db.mime,
+        'Content-Encoding': 'gzip',
+        'Content-Length': contentLength.toString(),
+        'Cache-Control': 'public, max-age=31536000, immutable',
+        'Access-Control-Allow-Origin': '*',
+      },
+      encodeBody: 'manual',
+    });
+    ctx.waitUntil(caches.default.put(cacheKey, response.clone()));
+    return response;
+  } catch (error) {
+    console.error(error);
+    return new Response('Internal Server Error', {
+      status: 500, headers: { 'Access-Control-Allow-Origin': '*' },
+    });
+  }
 }
 
-var src_default = {
+function passThroughHeaders(upstream) {
+  const headers = new Headers();
+  for (const h of PASS_THROUGH) {
+    const v = upstream.headers.get(h);
+    if (v !== null) headers.set(h, v);
+  }
+  headers.set('Access-Control-Allow-Origin', '*');
+  return headers;
+}
+
+export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    const base = url.origin + '/';
 
-    // Handle requests to databases
     const match = url.pathname.match(/^\/(pdb|a3m|cif|json|pae)\//);
     const type = match ? match[1] : null;
-    let extension = type ? type : null;
-    if (type === "pae") {
-      extension = "json";
-    }
     if (type) {
+      const extension = type === 'pae' ? 'json' : type;
       const keyWithExtension = url.pathname.slice(`/${type}/`.length);
       const id_part = keyWithExtension.replace(`.${extension}`, '');
       return await handleDbRequest(request, env, ctx, type, id_part);
     }
 
-    // Handle requests for archived data
-    if (url.searchParams.has("versions")) {
-      const version = url.searchParams.get("versions");
-      // List all objects in the bucket (you might need to adjust the limit if many objects exist)
-      const listResponse = await env.MY_BUCKET.list({ limit: 1000 });
-      const versionObjects = listResponse.objects.filter(obj => {
-        return obj.key.startsWith(version + "/");
+    if (url.searchParams.has('versions')) {
+      const version = url.searchParams.get('versions').replace(/\/$/, '');
+      const { objects } = await s3List(env, { sub: version + '/' });
+      // Not stored in the Cache API: the page is cheap to render and the S3
+      // listing beneath it is already edge-cached, whereas a cached page
+      // survives a deploy and hides HTML changes.
+      const headers = new Headers({
+        'content-type': 'text/html;charset=UTF-8',
+        'cache-control': 'public, max-age=3600',
       });
-      const headers = new Headers();
-      headers.set("content-type", "text/html;charset=UTF-8");
-      const response = new Response(autoIndexVersions(version, versionObjects), { headers, status: 200 });
-      ctx.waitUntil(caches.default.put(request, response.clone()));
-      return response;
+      return new Response(autoIndexVersions(base, version, objects), { headers, status: 200 });
     }
 
     let key = url.pathname.slice(1);
-    if (key === "bfvd.tar.gz" || key === "bfvd.version" || key === "bfvd_foldseekdb.tar.gz") {
-      key = "latest/" + key;
-    }
-    if (!authorizeRequest(request, env, key)) {
-      return new Response("Forbidden", { status: 403 });
+    if (key === 'bfvd.tar.gz' || key === 'bfvd.version' || key === 'bfvd_foldseekdb.tar.gz') {
+      key = 'latest/' + key;
     }
 
-    if (key == "" && request.method == "GET") {
-      let response = await caches.default.match(request);
-      if (!response) {
-        const list = await env.MY_BUCKET.list({ limit: 100 });
-        const headers = new Headers()
-        headers.set("content-type", "text/html;charset=UTF-8")
-        response = new Response(autoIndex(list.objects), { headers, status: 200 });
-        ctx.waitUntil(caches.default.put(request, response.clone()));
-      }
-      return response;
+    if (!authorizeRequest(request)) return new Response('Forbidden', { status: 403 });
+
+    if (key === '' && request.method === 'GET') {
+      // Two exact listings instead of filtering a capped 100-key page:
+      // everything under the current version, and the top-level folders.
+      const latestPrefix = (env.LATEST_PREFIX || 'latest').replace(/\/$/, '') + '/';
+      const [latest, top] = await Promise.all([
+        s3List(env, { sub: latestPrefix }),
+        s3List(env, { delimiter: '/' }),
+      ]);
+      const folders = top.prefixes
+        .map((p) => p.replace(/\/$/, ''))
+        .filter((p) => p !== latestPrefix.replace(/\/$/, ''))
+        .sort();
+      const latestObjects = latest.objects.map((o) => ({ ...o, key: latestPrefix + o.key }));
+      const headers = new Headers({
+        'content-type': 'text/html;charset=UTF-8',
+        'cache-control': 'public, max-age=60',
+      });
+      return new Response(autoIndex(base, latestObjects, folders), { headers, status: 200 });
     }
 
-    if (request.method == "HEAD") {
-      const object = await env.MY_BUCKET.head(key);
-      if (object === null) {
-        return new Response("Object Not Found", { status: 404 });
-      }
-      const headers = new Headers()
-      object.writeHttpMetadata(headers)
-      headers.set('etag', object.httpEtag)
-      headers.set("content-length", object.size)
-      return new Response(null, {
-        headers,
-      })
-    } else {
-      let range = parseRange(request.headers.get('range'));
-      if (range && range.end == 0) {
-        const object = await env.MY_BUCKET.head(key);
-        range.end = object.size - 1;
-        range.length = range.end + 1 - range.offset;
-      }
-      const object = await env.MY_BUCKET.get(key,{
-        range,
-        onlyIf: request.headers,
-      });
-      if (object === null) {
-        return new Response(`Object Not Found: ${key}`, { status: 404 });
-        // return new Response("Object Not Found", { status: 404 });
-      }
-      const headers = new Headers();
-      object.writeHttpMetadata(headers);
-      headers.set("etag", object.httpEtag);
-      if (range) {
-        headers.set("content-range", `bytes ${range.offset}-${range.end}/${object.size}`)
-      }
-      const status = object.body ? (range ? 206 : 200) : 304
-      return new Response(object.body, {
-        headers,
-        status
-      });
+    const s3key = resolveKey(env, key);
+
+    if (request.method === 'HEAD') {
+      const res = await s3Head(env, s3key);
+      if (!res.ok) return new Response('Object Not Found', { status: 404 });
+      return new Response(null, { headers: passThroughHeaders(res) });
     }
-  }
+
+    // Range and conditional headers are forwarded to S3 verbatim; S3 answers
+    // with 206/304 itself, so the old hand-rolled parseRange is gone.
+    const res = await s3Get(env, s3key, {
+      range: request.headers.get('range') || undefined,
+      conditional: request.headers,
+    });
+
+    if (res.status === 404) return new Response(`Object Not Found: ${key}`, { status: 404 });
+    if (res.status === 304) return new Response(null, { status: 304, headers: passThroughHeaders(res) });
+    if (!res.ok && res.status !== 206) {
+      console.error(`S3 get failed for ${s3key}: ${res.status}`);
+      return new Response('Internal Server Error', { status: 500 });
+    }
+
+    return new Response(res.body, { status: res.status, headers: passThroughHeaders(res) });
+  },
 };
-export {
-  src_default as default
-};
-//# sourceMappingURL=index.js.map

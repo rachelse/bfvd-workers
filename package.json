@@ -1,13 +1,13 @@
 {
-	"name": "bfvd",
-	"version": "0.0.0",
-	"private": true,
-	"scripts": {
-		"deploy": "wrangler deploy",
-		"dev": "wrangler dev",
-		"start": "wrangler dev"
-	},
-	"devDependencies": {
-		"wrangler": "^4.4.0"
-	}
+  "name": "bfvd-worker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "test": "node test/index_search.test.mjs && node test/worker.test.mjs && node test/pointer.test.mjs"
+  },
+  "devDependencies": {
+    "wrangler": "^3.80.0"
+  }
 }

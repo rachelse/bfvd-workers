@@ -8,3 +8,20 @@ preview_urls = true
 binding = "MY_BUCKET"
 bucket_name = "bfvd"
 preview_bucket_name = "bfvd"
+
+
+[vars]
+# Same public bucket the migrated Foldseek worker uses; BFVD lives under its
+# own prefix. Public read + list, so no credentials and no SigV4 signing.
+S3_BUCKET = "steineggerlab"
+S3_PREFIX = "bfvd/"
+# S3_HOST = "https://steineggerlab.s3.amazonaws.com"   # optional override
+
+# Bump on every data release. It scopes all internal cache keys, so a new value
+# invalidates cached index blocks and db responses with no Cloudflare purge.
+DATA_VERSION = "2025_03_v3"
+
+# "latest" = a real bfvd/latest/ folder of copies.
+# Set to a version folder (e.g. "2025_03_v3") to serve that as latest with no
+# duplicated objects in S3.
+LATEST_PREFIX = "2025_03_v3"
