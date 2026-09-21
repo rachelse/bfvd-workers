@@ -25,3 +25,9 @@ DATA_VERSION = "2025_03_v3"
 # Set to a version folder (e.g. "2025_03_v3") to serve that as latest with no
 # duplicated objects in S3.
 LATEST_PREFIX = "2025_03_v3"
+
+# Static files served straight from the edge, ahead of the worker. Only the
+# readme's graphical abstract lives here; every other path still falls through
+# to the S3-backed handler in src/worker.js.
+[assets]
+directory = "./public"

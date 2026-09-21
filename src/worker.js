@@ -1,4 +1,5 @@
 import { s3Get, s3Head, s3List, escapeHtml } from './s3.mjs';
+import { lookup } from './index_search.mjs';
 
 const PASS_THROUGH = [
   'content-type', 'content-length', 'content-encoding', 'content-range',
@@ -103,9 +104,9 @@ function autoIndex(base, release, latestObjects, versionPrefixes) {
     high confidence (pLDDT &ge; 70).
     </p>
     <p>
-    <a href="https://doi.org/10.1093/nar/gkae1119">Kim R, Levy Karin E, Steinegger M. BFVD - a large repository of predicted viral protein structures Nucleic Acids Research doi: doi.org/10.1093/nar/gkae1119 (2024)</a>
+    <a href="https://doi.org/10.64898/2026.09.16.752260">Kim RS, Pimenova O, Levy Karin E, Mirdita M, Steinegger M. BFVD v3 - UniProt-complete, improved viral protein structure predictions bioRxiv doi: 10.64898/2026.09.16.752260 (2026)</a>
     <div style="text-align:center;">
-    <img src="https://raw.githubusercontent.com/sokrypton/ColabFold/main/.github/ColabFold_Marv_Logo.png" alt="ColabFold Marv" style="max-width: 25%; height: auto;">
+    <img src="/graphical-abstract.jpg" alt="BFVD v3 graphical abstract" style="width: 100%; height: auto;">
     </div>
     <h3>Updates</h3>
     <p>
@@ -235,35 +236,10 @@ const CORS = {
   'Access-Control-Max-Age': '86400',
 };
 
-async function loadIndex(env, indexKey) {
-  const res = await s3Get(env, indexKey, { cf: { cacheTtl: 86400, cacheEverything: true } });
-  if (!res.ok) throw new Error(`index fetch failed for ${indexKey}: ${res.status}`);
-  const text = await res.text();
-  return text.split('\n').filter((line) => line.trim() !== '');
-}
-
-function binarySearchIndex(lines, targetId) {
-  let low = 0;
-  let high = lines.length - 1;
-  while (low <= high) {
-    const mid = Math.floor((low + high) / 2);
-    const [idPart, fileOffsetStr, contentLengthStr] = lines[mid].split('\t');
-    if (!idPart || !fileOffsetStr || !contentLengthStr) {
-      throw new Error(`Malformed line in index file at line ${mid + 1}`);
-    }
-    if (idPart === targetId) {
-      const fileContentOffset = parseInt(fileOffsetStr, 10);
-      const contentLength = parseInt(contentLengthStr, 10);
-      if (isNaN(fileContentOffset) || isNaN(contentLength)) {
-        throw new Error(`Invalid offset or length for id ${idPart} in index file`);
-      }
-      return { fileContentOffset, contentLength };
-    }
-    if (idPart < targetId) low = mid + 1;
-    else high = mid - 1;
-  }
-  return null;
-}
+// v3's index is 162 MB. Pulling it in full and calling .split() needs ~350 MB of
+// heap against a 128 MB isolate limit, which is why every /pdb/ request returned
+// 500 after the v3 cutover. lookup() binary-searches the index over HTTP range
+// requests instead: ~12 reads of 64 KiB on a cached grid.
 
 async function handleDbRequest(request, env, ctx, type, id_part) {
   if (request.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS });
@@ -287,8 +263,8 @@ async function handleDbRequest(request, env, ctx, type, id_part) {
   }
 
   try {
-    const lines = await loadIndex(env, indexKey);
-    const entry = binarySearchIndex(lines, id_part) || binarySearchIndex(lines, id_part + '_1');
+    let entry = await lookup(env, indexKey, id_part, ctx);
+    if (!entry) entry = await lookup(env, indexKey, id_part + '_1', ctx);
     if (!entry) {
       return new Response('File not found', { status: 404, headers: { 'Access-Control-Allow-Origin': '*' } });
     }
@@ -316,8 +292,12 @@ async function handleDbRequest(request, env, ctx, type, id_part) {
     ctx.waitUntil(caches.default.put(cacheKey, response.clone()));
     return response;
   } catch (error) {
-    console.error(error);
-    return new Response('Internal Server Error', {
+    console.error(`${type}/${id_part}: ${error && error.stack || error}`);
+    // DEBUG=1 surfaces the message so a failure can be diagnosed without
+    // `wrangler tail`. Leave it unset in normal operation.
+    const body = env.DEBUG ? `Internal Server Error: ${error && error.message || error}`
+                           : 'Internal Server Error';
+    return new Response(body, {
       status: 500, headers: { 'Access-Control-Allow-Origin': '*' },
     });
   }
